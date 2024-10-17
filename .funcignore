@@ -9,3 +9,5 @@ local.settings.json
 test
 tsconfig.json
 .env
+mykey
+mykey.pub
