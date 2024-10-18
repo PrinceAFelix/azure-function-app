@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 import { app } from '@azure/functions';
 import { CosmosClient } from "@azure/cosmos";
+import jwt from 'jsonwebtoken'
+
 
 dotenv.config();
 
@@ -10,6 +12,9 @@ const client = new CosmosClient(process.env.PRIMARY_CONNECTION_STRING);
 // Initialize database
 const databaseId = process.env.DATABASE_ID;
 const containerId = process.env.CONTAINER_ID;
+const jwtSecret = Buffer.from(process.env.JWT_SECRET, 'base64');
+
+
 
 
 app.http('RESTFunction1', {
@@ -22,8 +27,40 @@ app.http('RESTFunction1', {
 
         const { method } = request;
 
+        const authHeader = request.headers.get('authorization');
+
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return context.res = {
+                status: 401,
+                body: JSON.stringify({ error: "Authorization header missing or invalid" }),
+                headers: {
+                    "Content-Type": "application/json"
+                }
+            };
+        }
+
+        const token = authHeader.split(' ')[1]; // Get the token part
         try {
+
+
+            // Verify the JWT token
+            const decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
+
+            console.log(decoded.role)
+
+            // Check for specific claims (e.g., user role)
+            if (decoded.role[0]['authority'] !== 'ROLE_ADMIN') {
+                return context.res = {
+                    status: 403,
+                    body: JSON.stringify({ error: "Forbidden: Insufficient permissions" }),
+                    headers: {
+                        "Content-Type": "application/json"
+                    }
+                };
+            }
+
             switch (method) {
+
                 case 'GET':
                     if (id) {
                         const query = `SELECT c.id, c.name, c.email, c.age FROM c WHERE c.id = '${id}'`;
