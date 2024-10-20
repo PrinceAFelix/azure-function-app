@@ -104,6 +104,39 @@ app.http('RESTFunction1', {
                 case 'POST':
                 // Handle POST request (create a new user)
 
+                var requestData = await request.json();
+ 
+                    //Check if the id is already in the database
+                    var query = `SELECT * FROM c WHERE c.id = '${id}'`;
+ 
+                    // Execute the query to retrieve data from Cosmos DB
+                    var { resources: items } = await client
+                        .database(databaseId)
+                        .container(containerId)
+                        .items
+                        .query(query)
+                        .fetchAll();
+ 
+                    if (requestData.id && requestData.name && requestData.email && requestData.age && items.length == 0) {
+                        var { item } = await client
+                            .database(databaseId)
+                            .container(containerId)
+                            .items.upsert(requestData)
+ 
+                        return context.res = {
+                            status: 200,
+                            headers: {
+                                "Content-Type": "application/json"
+                            }
+                        };
+                    } else {
+                        return context.res = {
+                            status: 400,
+                            headers: {
+                                "Content-Type": "application/json"
+                            }
+                        };
+                    }
                 case 'PUT':
                     // Handle PUT request (update an existing user)
                     break;
