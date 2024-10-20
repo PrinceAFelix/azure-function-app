@@ -17,19 +17,20 @@ const jwtSecret = Buffer.from(process.env.JWT_SECRET, 'base64');
 
 
 
-app.http('RESTFunction1', {
+app.http('RESTFunction', {
     methods: ['GET', 'PUT', 'DELETE', 'POST'],
     authLevel: 'function',
-    route: 'users/{id:int?}',
+    route: 'users/{id?}/{partitionKey?}',
     handler: async (request, context) => {
-        const id = request.params.id;
         context.log(`Http function processed request for URL "${request.url}"`);
 
+        //Store the method from request
         const { method } = request;
 
+        //Used to take the bearer token from the request
         const authHeader = request.headers.get('authorization');
 
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        if (!authHeader || !authHeader.startsWith('Bearer ')) { //Reject the request if somthing is wrong wiht token
             return context.res = {
                 status: 401,
                 body: JSON.stringify({ error: "Authorization header missing or invalid" }),
@@ -39,17 +40,17 @@ app.http('RESTFunction1', {
             };
         }
 
-        const token = authHeader.split(' ')[1]; // Get the token part
-        try {
+        // Get the token part
+        const token = authHeader.split(' ')[1];
 
+        try {
 
             // Verify the JWT token
             const decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
 
-            console.log(decoded.role)
 
-            // Check for specific claims (e.g., user role)
-            if (decoded.role[0]['authority'] !== 'ROLE_ADMIN') {
+            // Check for specific claims (ROLE)
+            if (decoded.role[0]['authority'] !== 'ROLE_ADMIN') { //Return an error if invalid
                 return context.res = {
                     status: 403,
                     body: JSON.stringify({ error: "Forbidden: Insufficient permissions" }),
@@ -59,11 +60,15 @@ app.http('RESTFunction1', {
                 };
             }
 
-            switch (method) {
+            //Request header params
+            const id = request.params['id'];
+            const partitionKey = request.params['partitionKey'];
 
+            switch (method) {
                 case 'GET':
-                    if (id) {
-                        const query = `SELECT c.id, c.name, c.email, c.age FROM c WHERE c.id = '${id}'`;
+
+                    if (id) { //Get specific user by id
+                        const query = `SELECT c.id, c.name, c.email, c.age, c.role FROM c WHERE c.id = '${id}'`;
 
                         // Execute the query to retrieve data from Cosmos DB
                         const { resources: items } = await client
@@ -81,8 +86,8 @@ app.http('RESTFunction1', {
                                 "Content-Type": "application/json"
                             }
                         };
-                    } else {
-                        const query = `SELECT c.id, c.name, c.email, c.age FROM c`;
+                    } else { //Else get All
+                        const query = `SELECT c.id, c.name, c.email, c.age, c.role FROM c`;
 
                         // Execute the query to retrieve data from Cosmos DB
                         const { resources: items } = await client
@@ -102,13 +107,12 @@ app.http('RESTFunction1', {
                         };
                     }
                 case 'POST':
-                // Handle POST request (create a new user)
+                    // Handle POST request (create a new user)
+                    var requestData = await request.json();
 
-                var requestData = await request.json();
- 
                     //Check if the id is already in the database
                     var query = `SELECT * FROM c WHERE c.id = '${id}'`;
- 
+
                     // Execute the query to retrieve data from Cosmos DB
                     var { resources: items } = await client
                         .database(databaseId)
@@ -116,15 +120,16 @@ app.http('RESTFunction1', {
                         .items
                         .query(query)
                         .fetchAll();
- 
-                    if (requestData.id && requestData.name && requestData.email && requestData.age && items.length == 0) {
+
+                    if (requestData.id && requestData.name && requestData.email && requestData.age && requestData.role && requestData.password && items.length == 0) {
                         var { item } = await client
                             .database(databaseId)
                             .container(containerId)
                             .items.upsert(requestData)
- 
+
                         return context.res = {
                             status: 200,
+                            body: JSON.stringify({ status: "success", messgae: "User created", requestData }),
                             headers: {
                                 "Content-Type": "application/json"
                             }
@@ -138,36 +143,86 @@ app.http('RESTFunction1', {
                         };
                     }
                 case 'PUT':
-                    // Handle PUT request (update an existing user)
+
+                    var requestData = await request.json();
+
+                    if (id && partitionKey) {
+                        // Retrieve the existing item
+                        const { resource: existingItem } = await client
+                            .database(databaseId)
+                            .container(containerId)
+                            .item(id, partitionKey)
+                            .read();
+
+                        //Check if all fields are field
+                        if (requestData.id && requestData.name && requestData.email && requestData.age && requestData.role && requestData.password) {
+                            //Update fiels
+                            existingItem.name = requestData.name;
+                            existingItem.email = requestData.email;
+                            existingItem.age = requestData.age;
+                            existingItem.password = requestData.password;
+
+                            // Send the PUT request to update the document
+                            const { resource: updatedItem } = await client
+                                .database(databaseId)
+                                .container(containerId)
+                                .item(existingItem.id, partitionKey)
+                                .replace(existingItem);
+
+                            return context.res = {
+                                status: 200,
+                                body: JSON.stringify({ status: "success", messgae: "User created", updatedItem }),
+                                headers: {
+                                    "Content-Type": "application/json"
+                                }
+                            };
+                        }
+
+
+
+                    }
                     break;
                 case 'DELETE':
                     // Handle DELETE request (delete an existing user
 
                     if (id) {
-                        //Check if the id is already in the database
+                        // Check if the id is already in the database
                         var query = `SELECT * FROM c WHERE c.id = '${id}'`;
 
                         // Execute the query to retrieve data from Cosmos DB
-                        var { resources: item } = await client
+                        var { resources: items } = await client
                             .database(databaseId)
                             .container(containerId)
                             .items
                             .query(query)
                             .fetchNext();
-                        console.log(item[0]);
-                        // Delete the user with the specified ID
-                        await client
-                            .database(databaseId)
-                            .container(containerId)
-                            .item(item[0].id, item[0].name)
-                            .delete();
-                        return context.res = {
-                            status: 200,
-                            headers: {
-                                "Content-Type": "application/json"
-                            }
-                        };
 
+                        // Check if any item was found
+                        if (items.length > 0) {
+                            // Delete the user with the specified ID
+                            await client
+                                .database(databaseId)
+                                .container(containerId)
+                                .item(id, id) // Added partion
+                                .delete();
+
+                            return context.res = {
+                                status: 200,
+                                body: JSON.stringify({ status: "success", message: "User deleted", user: items[0] }),
+                                headers: {
+                                    "Content-Type": "application/json"
+                                }
+                            };
+                        } else {
+                            // If no user was found
+                            return context.res = {
+                                status: 404,
+                                body: JSON.stringify({ status: "error", message: "User not found." }),
+                                headers: {
+                                    "Content-Type": "application/json"
+                                }
+                            };
+                        }
                     } else {
                         // Return an error response if the ID is missing
                         return context.res = {
